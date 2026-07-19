@@ -1,0 +1,60 @@
+import socket
+
+def classify_ip(ip: str) -> str:
+    """
+    Determine the class of an IPv4 address based on its first octet.
+    
+    Args:
+        ip (str): IPv4 address in dotted decimal notation (e.g., '192.168.1.1')
+    
+    Returns:
+        str: The IP class ('A', 'B', 'C', 'D', 'E') or 'Invalid'
+    """
+    try:
+        first_octet = int(ip.split('.')[0])
+    except (ValueError, IndexError):
+        return "Invalid"
+
+    if 0 <= first_octet <= 127:
+        return "A"
+    elif 128 <= first_octet <= 191:
+        return "B"
+    elif 192 <= first_octet <= 223:
+        return "C"
+    elif 224 <= first_octet <= 239:
+        return "D"
+    elif 240 <= first_octet <= 255:
+        return "E"
+    else:
+        return "Invalid"
+
+
+def get_local_ip() -> str:
+    """
+    Retrieve the local IPv4 address of the machine.
+    
+    Returns:
+        str: The local IP address as a string, or an error message.
+    """
+    try:
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        return ip_address
+    except socket.error as e:
+        return f"Error: {e}"
+
+
+def main():
+    """Main program: display local IP and its class."""
+    ip = get_local_ip()
+    if ip.startswith("Error"):
+        print(ip)
+        return
+
+    ip_class = classify_ip(ip)
+    print(f"Local IP Address  : {ip}")
+    print(f"Class             : {ip_class}")
+
+
+if __name__ == "__main__":
+    main()

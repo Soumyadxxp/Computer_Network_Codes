@@ -1,0 +1,317 @@
+"""
+Go‑Back‑N ARQ Simulation
+------------------------
+A sliding‑window protocol with cumulative acknowledgements and
+retransmission of the entire window upon timeout.
+"""
+
+import random
+import time
+from typing import List, Optional, Dict
+from dataclasses import dataclass
+
+# ---------- Configuration ----------
+WINDOW_SIZE = 4
+TIMEOUT_SECONDS = 2.0
+PACKET_LOSS_PROBABILITY = 0.2
+ACK_LOSS_PROBABILITY = 0.1
+CORRUPTION_PROBABILITY = 0.05
+SIMULATION_STEP_SECONDS = 0.2
+MAX_RETRIES = 10                # prevent infinite loops
+
+# Fixed seed for reproducibility
+random.seed(42)
+
+
+# ---------- Data structures ----------
+@dataclass
+class Frame:
+    seq: int
+    data: str
+
+@dataclass
+class Ack:
+    seq: int
+
+
+# ---------- Channel ----------
+class Channel:
+    """Simulates an unreliable channel with loss and corruption."""
+    def send_frame(self, frame: Frame) -> Optional[Frame]:
+        if random.random() < PACKET_LOSS_PROBABILITY:
+            print(f"Channel: frame {frame.seq} lost")
+            return None
+
+        if random.random() < CORRUPTION_PROBABILITY:
+            print(f"Channel: frame {frame.seq} corrupted")
+            return Frame(frame.seq, "<CORRUPTED>")
+
+        print(f"Channel: frame {frame.seq} delivered")
+        return frame
+
+    def send_ack(self, ack: Ack) -> Optional[Ack]:
+        if random.random() < ACK_LOSS_PROBABILITY:
+            print(f"Channel: ACK {ack.seq} lost")
+            return None
+
+        print(f"Channel: ACK {ack.seq} delivered")
+        return ack
+
+
+# ---------- Receiver (Go‑Back‑N) ----------
+class Receiver:
+    """
+    Go‑Back‑N receiver:
+    - Accepts only in‑order frames.
+    - Discards out‑of‑order frames.
+    - Sends cumulative ACK for the last in‑order frame.
+    """
+    def __init__(self):
+        self.expected_seq = 0
+        self.delivered: List[str] = []
+
+    def receive(self, frame: Optional[Frame]) -> Optional[Ack]:
+        if frame is None:
+            return None
+
+        if frame.data == "<CORRUPTED>":
+            print(f"Receiver: frame {frame.seq} corrupted, discarding")
+            return None
+
+        if frame.seq == self.expected_seq:
+            print(f"Receiver: accepted frame {frame.seq} -> '{frame.data}'")
+            self.delivered.append(frame.data)
+            self.expected_seq += 1
+            # Cumulative ACK for this frame (and all previous)
+            return Ack(frame.seq)
+
+        if frame.seq < self.expected_seq:
+            # Duplicate of an already accepted frame
+            print(f"Receiver: duplicate frame {frame.seq}, resending ACK {self.expected_seq - 1}")
+            if self.expected_seq > 0:
+                return Ack(self.expected_seq - 1)
+            return None
+
+        # Out‑of‑order: discard, but send ACK for the last in‑order frame
+        print(f"Receiver: out‑of‑order frame {frame.seq} discarded, expected {self.expected_seq}")
+        if self.expected_seq > 0:
+            return Ack(self.expected_seq - 1)
+        return None
+
+
+# ---------- Sender (Go‑Back‑N) ----------
+class Sender:
+    """
+    Go‑Back‑N sender:
+    - Maintains a sliding window.
+    - Sends new frames when window allows.
+    - On timeout, retransmits all frames from base.
+    - Cumulative ACK slides the window.
+    """
+    def __init__(self, messages: List[str]):
+        self.messages = messages
+        self.total = len(messages)
+        self.base = 0
+        self.next_seq = 0
+        self.timer_deadline: Optional[float] = None
+        self.retry_count: Dict[int, int] = {i: 0 for i in range(self.total)}
+
+    def can_send_next(self) -> bool:
+        return (self.next_seq < self.total and
+                self.next_seq < self.base + WINDOW_SIZE)
+
+    def next_frame(self) -> Frame:
+        seq = self.next_seq
+        frame = Frame(seq, self.messages[seq])
+        self.retry_count[seq] += 1
+        if self.base == seq:
+            self.timer_deadline = time.time() + TIMEOUT_SECONDS
+        print(f"Sender: sending frame {seq} -> '{frame.data}' (try {self.retry_count[seq]})")
+        self.next_seq += 1
+        return frame
+
+    def process_ack(self, ack: Optional[Ack]) -> None:
+        if ack is None:
+            return
+
+        seq = ack.seq
+        if seq < self.base or seq >= self.next_seq:
+            print(f"Sender: ACK {seq} outside window, ignored")
+            return
+
+        print(f"Sender: cumulative ACK {seq} received")
+        # Slide window forward
+        self.base = seq + 1
+        if self.base < self.next_seq:
+            self.timer_deadline = time.time() + TIMEOUT_SECONDS
+        else:
+            self.timer_deadline = None
+
+    def get_retransmissions(self) -> List[Frame]:
+        """Return all frames from base to next_seq‑1 if timeout expired."""
+        now = time.time()
+        if self.timer_deadline is None or now < self.timer_deadline:
+            return []
+
+        print(f"Sender: timeout! Retransmitting window {self.base}..{self.next_seq - 1}")
+        self.timer_deadline = now + TIMEOUT_SECONDS
+        retrans = []
+        for seq in range(self.base, self.next_seq):
+            self.retry_count[seq] += 1
+            if self.retry_count[seq] > MAX_RETRIES:
+                print(f"Sender: frame {seq} exceeded max retries, giving up")
+                # Mark as delivered to allow progress (will be considered lost)
+                # We'll still retransmit, but we'll note failure later.
+                # For simplicity, we continue and let simulation run.
+            retrans.append(Frame(seq, self.messages[seq]))
+        return retrans
+
+    def all_acked(self) -> bool:
+        return self.base >= self.total
+
+
+# ---------- Simulation ----------
+def simulate_go_back_n(messages: List[str]) -> None:
+    """Run the Go‑Back‑N simulation with the given messages."""
+    sender = Sender(messages)
+    receiver = Receiver()
+    channel = Channel()
+
+    # Outstanding frames that have been sent but not yet acked
+    outstanding: List[Frame] = []
+
+    print("\n=== Go‑Back‑N ARQ Simulation ===\n")
+    print(f"Messages to send: {len(messages)}")
+    print(f"Window size: {WINDOW_SIZE}")
+    print(f"Timeout: {TIMEOUT_SECONDS}s")
+    print(f"Packet loss: {PACKET_LOSS_PROBABILITY*100:.0f}%")
+    print(f"ACK loss: {ACK_LOSS_PROBABILITY*100:.0f}%")
+    print(f"Corruption: {CORRUPTION_PROBABILITY*100:.0f}%")
+    print(f"Max retries per packet: {MAX_RETRIES}\n")
+
+    iteration = 0
+    while not sender.all_acked():
+        iteration += 1
+        print(f"\n--- Iteration {iteration} ---")
+
+        # 1. Send new frames if window allows
+        while sender.can_send_next():
+            frame = sender.next_frame()
+            outstanding.append(frame)
+
+        # 2. Add retransmissions (if timeout occurred)
+        retrans = sender.get_retransmissions()
+        outstanding.extend(retrans)
+
+        # 3. Process all outstanding frames through the channel
+        pending_acks: List[Ack] = []
+        new_outstanding: List[Frame] = []
+
+        for frame in outstanding:
+            delivered = channel.send_frame(frame)
+            if delivered is not None:
+                ack = receiver.receive(delivered)
+                if ack is not None:
+                    pending_acks.append(ack)
+                # Frame delivered, so we don't keep it for next round
+                # (it will be acked if correct; if out‑of‑order, it will be discarded,
+                # but we still need to retransmit it later; however, it is already
+                # in outstanding, but since receiver discarded it, it won't produce
+                # an ack that advances base, so the sender will timeout and retransmit.
+                # For now, we don't add it to new_outstanding because it was processed,
+                # but if the receiver discarded it, we need to keep it for retransmission.
+                # The correct logic: only remove a frame from outstanding if it was
+                # successfully delivered AND the receiver accepted it (i.e., we got an ACK).
+                # But we don't yet know if the ACK will be processed; we'll decide later.
+                # We'll just collect all ACKs and then after processing, we'll prune
+                # outstanding to only those frames that are not yet acked.
+                # So we'll not add any to new_outstanding for now; we'll filter later.
+                pass
+            else:
+                # Frame lost; keep it for future retransmission
+                new_outstanding.append(frame)
+
+        # 4. Process all ACKs through the channel and update sender
+        for ack in pending_acks:
+            delivered_ack = channel.send_ack(ack)
+            sender.process_ack(delivered_ack)
+
+        # 5. Update outstanding: keep only frames that are not yet acked
+        #    i.e., frames with seq >= base (since cumulative ACK slides base)
+        #    Also, include the lost frames from new_outstanding.
+        outstanding = [f for f in new_outstanding if f.seq >= sender.base]
+        # Also add frames that were delivered but whose ACK might have been lost?
+        # Actually, if the frame was delivered and receiver accepted it, it would
+        # have sent an ACK. If that ACK was lost, the sender will not advance base,
+        # and the frame will remain in outstanding (because base didn't move).
+        # But we removed it from new_outstanding because it was delivered.
+        # So we need to re-add it if it's still not acked.
+        # Instead, we can simply rebuild outstanding from the sender's perspective:
+        # the outstanding frames are those from base to next_seq-1 that are not yet acked.
+        # Since we have sender.base and sender.next_seq, we can reconstruct:
+        # But we also need to know which frames have been sent (we know next_seq).
+        # So better: after processing ACKs, we can just set outstanding to all frames
+        # from base to next_seq-1 that have been sent (and not acked).
+        # However, we lost frames may be among those. We'll just use the sender's state:
+        # The sender knows which frames are sent but not acked: they are in the window.
+        # We can simply rebuild outstanding as all frames from base to next_seq-1
+        # that are not yet acked (but we don't have a per-frame ack flag; we use base).
+        # In Go-Back-N, all frames in the window are unacked. So outstanding = window.
+        # But some frames may have been sent, some not yet (next_seq < base+window).
+        # Actually, the sender sends frames as they become available; the outstanding
+        # list should contain frames that have been sent and are waiting for ACK.
+        # So we can reconstruct outstanding = [Frame(seq, self.messages[seq]) for seq in range(self.base, self.next_seq)].
+        # But we need to preserve the order and also keep track of which frames were
+        # lost (so they are still in the list to be retransmitted on timeout).
+        # The simplest is to just set outstanding = [Frame(seq, sender.messages[seq]) for seq in range(sender.base, sender.next_seq)].
+        # However, that would create new Frame objects each iteration, but that's fine.
+        # Let's adopt that: after ACK processing, we rebuild outstanding from sender's window.
+        # This automatically discards frames that were acked (base moved) and keeps those not acked.
+        # It also includes frames that were lost (they are still in the window).
+        # This is correct because the sender will retransmit the entire window on timeout.
+        outstanding = [Frame(seq, sender.messages[seq]) for seq in range(sender.base, sender.next_seq)]
+
+        if sender.all_acked():
+            break
+
+        time.sleep(SIMULATION_STEP_SECONDS)
+
+    # Final report
+    print("\n=== Transmission Complete ===")
+    print(f"Sent {len(messages)} messages, delivered {len(receiver.delivered)}")
+    if len(receiver.delivered) == len(messages):
+        print("All messages delivered successfully!")
+    else:
+        print(f"WARNING: {len(messages) - len(receiver.delivered)} messages lost.")
+    print("\nDelivered messages (in order):")
+    for i, msg in enumerate(receiver.delivered):
+        print(f"  {i}: {msg}")
+    print("\nGo‑Back‑N simulation finished.")
+
+
+# ---------- Main ----------
+def main():
+    """Entry point: run with default example or user-provided packet count."""
+    print("Go‑Back‑N ARQ Demo\n")
+    default_messages = [f"Packet {i}" for i in range(8)]
+    print("Default messages:")
+    for i, msg in enumerate(default_messages):
+        print(f"  {i}: {msg}")
+    print()
+
+    choice = input("Use default? (y/n): ").strip().lower()
+    if choice == 'y':
+        messages = default_messages
+    else:
+        try:
+            n = int(input("Enter number of packets to send (e.g., 8): "))
+            messages = [f"Packet {i}" for i in range(n)]
+        except ValueError:
+            print("Invalid input, using default.")
+            messages = default_messages
+
+    simulate_go_back_n(messages)
+
+
+if __name__ == "__main__":
+    main()

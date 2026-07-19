@@ -1,0 +1,284 @@
+"""
+Selective Repeat ARQ Simulation
+--------------------------------
+A reliable data‑transfer protocol with sliding window, selective ACKs,
+and retransmission of lost/corrupted frames.
+"""
+
+import random
+import time
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+# ---------- Configuration ----------
+WINDOW_SIZE = 4
+TIMEOUT_SECONDS = 2.0
+PACKET_LOSS_PROBABILITY = 0.2
+ACK_LOSS_PROBABILITY = 0.1
+CORRUPTION_PROBABILITY = 0.05
+SIMULATION_STEP_SECONDS = 0.2
+MAX_RETRIES = 10                # prevent infinite loops
+
+# Fixed seed for reproducibility
+random.seed(42)
+
+
+# ---------- Data structures ----------
+@dataclass
+class Frame:
+    seq: int
+    data: str
+
+@dataclass
+class Ack:
+    seq: int
+
+
+# ---------- Channel ----------
+class Channel:
+    """Simulates an unreliable channel with loss and corruption."""
+    def send_frame(self, frame: Frame) -> Optional[Frame]:
+        if random.random() < PACKET_LOSS_PROBABILITY:
+            print(f"Channel: frame {frame.seq} lost")
+            return None
+
+        if random.random() < CORRUPTION_PROBABILITY:
+            print(f"Channel: frame {frame.seq} corrupted")
+            return Frame(frame.seq, "<CORRUPTED>")
+
+        print(f"Channel: frame {frame.seq} delivered")
+        return frame
+
+    def send_ack(self, ack: Ack) -> Optional[Ack]:
+        if random.random() < ACK_LOSS_PROBABILITY:
+            print(f"Channel: ACK {ack.seq} lost")
+            return None
+
+        print(f"Channel: ACK {ack.seq} delivered")
+        return ack
+
+
+# ---------- Receiver ----------
+class Receiver:
+    """Selective Repeat receiver with a buffer for out‑of‑order frames."""
+    def __init__(self):
+        self.base = 0
+        self.buffer: Dict[int, str] = {}
+        self.delivered: List[str] = []
+
+    def receive(self, frame: Optional[Frame]) -> Optional[Ack]:
+        if frame is None:
+            return None
+
+        if frame.data == "<CORRUPTED>":
+            print(f"Receiver: frame {frame.seq} corrupted, discarding")
+            return None
+
+        # Duplicate of already delivered frame?
+        if frame.seq < self.base:
+            print(f"Receiver: duplicate old frame {frame.seq}, ACKing again")
+            return Ack(frame.seq)
+
+        # Outside receiver window (should not happen with correct window sizes)
+        if frame.seq >= self.base + WINDOW_SIZE:
+            print(f"Receiver: frame {frame.seq} outside window, dropped")
+            return None
+
+        # Already buffered? (duplicate)
+        if frame.seq in self.buffer:
+            print(f"Receiver: duplicate buffered frame {frame.seq}, ACKing")
+            return Ack(frame.seq)
+
+        # Accept and buffer
+        print(f"Receiver: buffering frame {frame.seq}")
+        self.buffer[frame.seq] = frame.data
+
+        # Deliver in order
+        while self.base in self.buffer:
+            msg = self.buffer.pop(self.base)
+            self.delivered.append(msg)
+            print(f"Receiver: delivered frame {self.base} -> '{msg}'")
+            self.base += 1
+
+        # ACK the received frame (selective ACK)
+        return Ack(frame.seq)
+
+
+# ---------- Sender ----------
+class Sender:
+    """Selective Repeat sender with window, timers, and retransmission."""
+    def __init__(self, messages: List[str]):
+        self.messages = messages
+        self.total = len(messages)
+        self.base = 0
+        self.next_seq = 0
+        self.acked: Dict[int, bool] = {i: False for i in range(self.total)}
+        self.timers: Dict[int, float] = {}
+        self.retry_count: Dict[int, int] = {i: 0 for i in range(self.total)}
+
+    def can_send_next(self) -> bool:
+        return (self.next_seq < self.total and
+                self.next_seq < self.base + WINDOW_SIZE)
+
+    def next_frame(self) -> Frame:
+        seq = self.next_seq
+        frame = Frame(seq, self.messages[seq])
+        self.timers[seq] = time.time() + TIMEOUT_SECONDS
+        self.retry_count[seq] += 1
+        print(f"Sender: sending frame {seq} -> '{frame.data}' (try {self.retry_count[seq]})")
+        self.next_seq += 1
+        return frame
+
+    def process_ack(self, ack: Optional[Ack]) -> None:
+        if ack is None:
+            return
+
+        seq = ack.seq
+        if seq < self.base or seq >= self.base + WINDOW_SIZE:
+            print(f"Sender: ACK {seq} outside window, ignored")
+            return
+
+        if self.acked.get(seq, False):
+            print(f"Sender: duplicate ACK {seq} ignored")
+            return
+
+        print(f"Sender: ACK {seq} received")
+        self.acked[seq] = True
+        self.timers.pop(seq, None)
+
+        # Slide window while base is acked
+        while self.base < self.total and self.acked.get(self.base, False):
+            print(f"Sender: sliding window, base moves from {self.base} to {self.base + 1}")
+            self.base += 1
+
+    def get_retransmissions(self) -> List[Frame]:
+        """Return frames that have timed out and need retransmission."""
+        now = time.time()
+        retrans = []
+        for seq in range(self.base, min(self.base + WINDOW_SIZE, self.total)):
+            if not self.acked[seq] and self.timers.get(seq, 0) <= now:
+                if self.retry_count[seq] >= MAX_RETRIES:
+                    print(f"Sender: frame {seq} exceeded max retries, giving up")
+                    # Mark as acked to allow progress (but we will treat as failure later)
+                    self.acked[seq] = True
+                    continue
+                print(f"Sender: timeout for frame {seq}, retransmitting")
+                self.timers[seq] = now + TIMEOUT_SECONDS
+                self.retry_count[seq] += 1
+                retrans.append(Frame(seq, self.messages[seq]))
+        return retrans
+
+    def all_acked(self) -> bool:
+        return self.base >= self.total
+
+
+# ---------- Simulation ----------
+def simulate_selective_repeat(messages: List[str]) -> None:
+    """Run the Selective Repeat simulation with the given messages."""
+    sender = Sender(messages)
+    receiver = Receiver()
+    channel = Channel()
+
+    # Outstanding frames that have been sent but not yet acked
+    outstanding: List[Frame] = []
+
+    print("\n=== Selective Repeat ARQ Simulation ===\n")
+    print(f"Messages to send: {len(messages)}")
+    print(f"Window size: {WINDOW_SIZE}")
+    print(f"Timeout: {TIMEOUT_SECONDS}s")
+    print(f"Packet loss: {PACKET_LOSS_PROBABILITY*100:.0f}%")
+    print(f"ACK loss: {ACK_LOSS_PROBABILITY*100:.0f}%")
+    print(f"Corruption: {CORRUPTION_PROBABILITY*100:.0f}%")
+    print(f"Max retries per packet: {MAX_RETRIES}\n")
+
+    iteration = 0
+    while not sender.all_acked():
+        iteration += 1
+        print(f"\n--- Iteration {iteration} ---")
+
+        # 1. Send new frames if window allows
+        while sender.can_send_next():
+            frame = sender.next_frame()
+            outstanding.append(frame)
+
+        # 2. Add retransmissions (timeouts)
+        retrans = sender.get_retransmissions()
+        outstanding.extend(retrans)
+
+        # 3. Process all outstanding frames through the channel
+        next_outstanding: List[Frame] = []
+        pending_acks: List[Ack] = []
+
+        for frame in outstanding:
+            delivered = channel.send_frame(frame)
+            if delivered is not None:
+                ack = receiver.receive(delivered)
+                if ack is not None:
+                    pending_acks.append(ack)
+                # If frame was delivered successfully, we don't keep it
+                # (it will be removed from outstanding because it will be acked)
+            else:
+                # Frame was lost; keep it for future retransmission
+                next_outstanding.append(frame)
+
+        # 4. Process all ACKs
+        for ack in pending_acks:
+            delivered_ack = channel.send_ack(ack)
+            sender.process_ack(delivered_ack)
+
+        # 5. Update outstanding list with only the frames not yet acked
+        # (We don't keep frames that are already acked; sender.base will slide)
+        # However, some frames may still be in outstanding even if acked but not yet processed?
+        # We'll filter: keep only those frames whose seq is >= base and not acked.
+        outstanding = [f for f in next_outstanding if
+                       f.seq >= sender.base and not sender.acked.get(f.seq, False)]
+
+        # 6. Check if we are stuck (no progress)
+        if not outstanding and not sender.all_acked():
+            # This can happen if all frames in window are acked but base hasn't moved?
+            # Usually base moves. But if some frames are acked and we have no outstanding,
+            # we should be able to send new ones. So just continue.
+            pass
+
+        time.sleep(SIMULATION_STEP_SECONDS)
+
+    # Final report
+    print("\n=== Transmission Complete ===")
+    print(f"Sent {len(messages)} messages, delivered {len(receiver.delivered)}")
+    if len(receiver.delivered) == len(messages):
+        print("All messages delivered successfully!")
+    else:
+        print(f"WARNING: {len(messages) - len(receiver.delivered)} messages lost.")
+    print("\nDelivered messages (in order):")
+    for i, msg in enumerate(receiver.delivered):
+        print(f"  {i}: {msg}")
+    print("\nSelective Repeat simulation finished.")
+
+
+# ---------- Main ----------
+def main():
+    """Entry point: run with default example or user-provided packet count."""
+    print("Selective Repeat ARQ Demo\n")
+    # Provide a default example
+    default_messages = [f"Packet {i}" for i in range(8)]
+    print("Default messages:")
+    for i, msg in enumerate(default_messages):
+        print(f"  {i}: {msg}")
+    print()
+
+    choice = input("Use default? (y/n): ").strip().lower()
+    if choice == 'y':
+        messages = default_messages
+    else:
+        try:
+            n = int(input("Enter number of packets to send (e.g., 8): "))
+            messages = [f"Packet {i}" for i in range(n)]
+        except ValueError:
+            print("Invalid input, using default.")
+            messages = default_messages
+
+    simulate_selective_repeat(messages)
+
+
+if __name__ == "__main__":
+    main()

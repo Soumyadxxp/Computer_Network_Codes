@@ -1,0 +1,260 @@
+import random
+import time
+
+# ==============================================================
+# Stop-and-Wait ARQ (as a Sliding Window Protocol with N=1)
+# ==============================================================
+
+# Fixed seed for reproducible simulation
+random.seed(10)
+
+# Channel loss probabilities
+FRAME_LOSS_PROB = 0.35      # Probability that a data frame is lost
+ACK_LOSS_PROB   = 0.25      # Probability that an ACK is lost
+TIMEOUT         = 1.5       # Sender timeout in seconds
+
+# Sliding window parameters (N=1 => Stop-and-Wait)
+WINDOW_SIZE = 1             # Only 1 outstanding frame allowed
+MAX_SEQ     = 2             # Sequence numbers: 0 and 1 (modulo 2)
+
+# Messages to transmit
+MESSAGES = [
+    "Hello",
+    "Computer Networks",
+    "Stop and Wait ARQ",
+    "Python Simulation",
+    "Transmission Complete"
+]
+
+
+# --------------------------------------------------------------
+# Sender functions
+# --------------------------------------------------------------
+
+def send_frame(seq_num: int, payload: str):
+    """
+    Simulate sending a frame over a lossy channel.
+    Returns the frame (seq_num, payload) if delivered, else None.
+    """
+    print("\n" + "-" * 50)
+    print("Sender")
+    print(f"  Sending Frame")
+    print(f"  Sequence Number : {seq_num}")
+    print(f"  Payload         : {payload}")
+
+    time.sleep(0.7)  # Transmission delay
+
+    if random.random() < FRAME_LOSS_PROB:
+        print("CHANNEL : Frame LOST")
+        return None
+
+    print("CHANNEL : Frame Delivered")
+    return (seq_num, payload)
+
+
+def send_ack(ack_num: int):
+    """
+    Simulate sending an acknowledgment over a lossy channel.
+    Returns the ACK number if delivered, else None.
+    """
+    time.sleep(0.5)  # Propagation delay
+
+    if random.random() < ACK_LOSS_PROB:
+        print(f"CHANNEL : ACK({ack_num}) LOST")
+        return None
+
+    print(f"CHANNEL : ACK({ack_num}) Delivered")
+    return ack_num
+
+
+# --------------------------------------------------------------
+# Receiver (Standard Stop-and-Wait logic)
+# --------------------------------------------------------------
+
+def receive_frame(frame, expected_seq: int):
+    """
+    Process a received frame (or None if lost).
+    Returns:
+      - ack_num: sequence number to acknowledge (or None)
+      - payload: accepted data (or None if discarded)
+      - new_expected: updated expected sequence number
+    """
+    if frame is None:
+        print("Receiver : No frame received.")
+        return None, None, expected_seq
+
+    seq_num, payload = frame
+    print("\nReceiver")
+    print(f"  Received Sequence : {seq_num}")
+
+    if seq_num == expected_seq:
+        # Correct frame – accept it and toggle expectation
+        print("  Status            : Correct Frame")
+        print(f"  Accepted Data     : {payload}")
+        new_expected = expected_seq ^ 1
+        return seq_num, payload, new_expected
+    else:
+        # Duplicate frame – discard but send ACK for the last accepted frame
+        print("  Status            : Duplicate Frame")
+        print("  Discarding Duplicate")
+        # ACK for the last correctly received sequence (which is 1-expected)
+        ack_to_send = 1 - expected_seq
+        return ack_to_send, None, expected_seq
+
+
+# --------------------------------------------------------------
+# Main simulation using sliding-window variables (N=1)
+# --------------------------------------------------------------
+
+def main():
+    # ---------- Sender sliding-window state ----------
+    base = 0          # oldest unacknowledged sequence number (actual count)
+    next_seqnum = 0   # next sequence number to use (actual count)
+    msg_index = 0     # index into MESSAGES list
+
+    # Store message for possible retransmission (map: seq_mod -> payload)
+    frame_data = {}
+
+    # ---------- Receiver state ----------
+    receiver_expected = 0
+
+    # ---------- Statistics ----------
+    sent_messages = []      # messages that have been acknowledged
+    received_messages = []  # messages accepted by receiver
+
+    # ---------- Timer ----------
+    timer_start = None      # time when the current frame was sent
+
+    print("=" * 70)
+    print("  STOP-AND-WAIT ARQ (Sliding Window with WINDOW_SIZE = 1)")
+    print("=" * 70)
+    print(f"Window Size = {WINDOW_SIZE}, Max Sequence = {MAX_SEQ}\n")
+
+    while msg_index < len(MESSAGES) or base != next_seqnum:
+
+        # ----------------------------------------------------------
+        # 1. Try to send a new frame if the window is not full
+        #    (with N=1, this only happens when base == next_seqnum)
+        # ----------------------------------------------------------
+        if (next_seqnum - base) < WINDOW_SIZE and msg_index < len(MESSAGES):
+            seq_mod = next_seqnum % MAX_SEQ
+            data = MESSAGES[msg_index]
+            frame_data[seq_mod] = data   # store for retransmission
+
+            # Send the frame over the lossy channel
+            delivered_frame = send_frame(seq_mod, data)
+
+            # Even if lost, we treat it as sent (will retransmit later)
+            next_seqnum += 1
+            msg_index += 1
+
+            # Reset timer for this new frame
+            timer_start = time.time()
+
+        # ----------------------------------------------------------
+        # 2. Process the receiver's reaction to the delivered frame
+        #    (if it was delivered). Since N=1, we only have one frame
+        #    outstanding, which is at sequence `base`.
+        # ----------------------------------------------------------
+        # We need to know if the frame at `base` was delivered.
+        # We'll re‑use the delivered_frame from above. But to keep the
+        # sliding-window paradigm, we check if we have a frame in flight.
+        # For simplicity, we simulate the receiver processing right here.
+
+        # In a real sliding window, we would collect delivered frames.
+        # Since N=1, we process the single frame we just sent.
+        # We stored `delivered_frame` above. If it is None, the frame was lost.
+        # We now call receive_frame on this delivered_frame.
+
+        if delivered_frame is not None:
+            ack_num, payload, receiver_expected = receive_frame(
+                delivered_frame, receiver_expected
+            )
+            if payload is not None:
+                received_messages.append(payload)
+        else:
+            # Frame was lost – receiver gets nothing, no ACK is sent
+            ack_num = None
+            print("Receiver : No frame received (lost).")
+
+        # ----------------------------------------------------------
+        # 3. Send the ACK (if any) and process it at the sender
+        # ----------------------------------------------------------
+        if ack_num is not None:
+            delivered_ack = send_ack(ack_num)
+
+            if delivered_ack is not None:
+                # Cumulative ACK for Stop-and-Wait: check if it matches base
+                if delivered_ack == (base % MAX_SEQ):
+                    print(f"\nSender : ACK({delivered_ack}) Received")
+                    print("Sender : Transmission Successful")
+                    # Slide the window forward by 1
+                    sent_messages.append(frame_data[base % MAX_SEQ])
+                    del frame_data[base % MAX_SEQ]
+                    base += 1
+                    # next_seqnum is already incremented, so window is now empty
+                else:
+                    print(f"\nSender : ACK({delivered_ack}) does not match base({base % MAX_SEQ}) – ignoring")
+            else:
+                # ACK was lost – sender gets nothing
+                print("\nSender : ACK lost in channel")
+        else:
+            # No ACK was generated (frame was lost)
+            print("\nSender : No ACK received")
+
+        # ----------------------------------------------------------
+        # 4. Check for timeout and retransmit if needed
+        # ----------------------------------------------------------
+        # Timeout occurs if base hasn't advanced and timer has expired
+        if timer_start is not None and (time.time() - timer_start) > TIMEOUT:
+            if base < next_seqnum:   # there is an outstanding frame
+                print("\nTIMEOUT OCCURRED")
+                print("Retransmitting frame...")
+                # Retransmit the base frame (without advancing msg_index)
+                seq_mod = base % MAX_SEQ
+                data = frame_data.get(seq_mod)
+                if data is not None:
+                    delivered_frame = send_frame(seq_mod, data)
+                    # We would process the receiver again, but to keep the loop
+                    # simple, we just continue – the next iteration will handle it.
+                    # However, we need to reset the timer.
+                    timer_start = time.time()
+                    # Note: we'll let the loop go to the top to process the ACK.
+                    # But to avoid infinite loops, we continue to the next iteration.
+                    # This effectively re-enters the receiver processing.
+
+        # Small delay to avoid busy-looping
+        time.sleep(0.1)
+
+    # ----------------------------------------------------------
+    # Final report
+    # ----------------------------------------------------------
+    print("\n")
+    print("=" * 70)
+    print("TRANSMISSION REPORT")
+    print("=" * 70)
+
+    print("\nOriginal Messages:")
+    for i, msg in enumerate(MESSAGES, 1):
+        print(f"  {i}. {msg}")
+
+    print("\nReceived Messages:")
+    for i, msg in enumerate(received_messages, 1):
+        print(f"  {i}. {msg}")
+
+    print("\nStatistics:")
+    print(f"  Messages Sent Successfully : {len(sent_messages)}")
+    print(f"  Messages Received          : {len(received_messages)}")
+
+    if sent_messages == received_messages:
+        print("\nRESULT : SUCCESS")
+        print("Every message reached the receiver correctly.")
+    else:
+        print("\nRESULT : FAILURE")
+        print("Some messages were lost or corrupted.")
+
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,100 @@
+"""
+CRC (Cyclic Redundancy Check) Encoder / Verifier
+Binary polynomial division with modulo‑2 arithmetic.
+"""
+
+def xor_bits(a: str, b: str) -> str:
+    """XOR two binary strings of equal length."""
+    return ''.join('0' if a[i] == b[i] else '1' for i in range(len(a)))
+
+
+def mod2div(dividend: str, divisor: str) -> str:
+    """
+    Perform binary polynomial division (mod‑2) and return the remainder.
+    The remainder has length (len(divisor) - 1).
+    """
+    n = len(divisor)
+    # Take the first n bits of the dividend
+    temp = dividend[:n]
+
+    # Process each remaining bit
+    for bit in dividend[n:]:
+        # If the leftmost bit is 1, XOR with divisor; else with zeros
+        if temp[0] == '1':
+            temp = xor_bits(divisor, temp)
+        else:
+            temp = xor_bits('0' * n, temp)
+        # Shift left and bring in the next bit from dividend
+        temp = temp[1:] + bit
+
+    # Final reduction (no more bits to append)
+    if temp[0] == '1':
+        temp = xor_bits(divisor, temp)
+    else:
+        temp = xor_bits('0' * n, temp)
+
+    # Return the remainder (last n-1 bits)
+    return temp[1:]
+
+
+def encode_data(data: str, generator: str) -> str:
+    """
+    Append the CRC remainder to the data and return the codeword.
+    """
+    n = len(generator)
+    padded = data + '0' * (n - 1)      # append (n‑1) zeros
+    remainder = mod2div(padded, generator)
+    return data + remainder
+
+
+def verify_codeword(codeword: str, generator: str) -> bool:
+    """
+    Verify that the codeword is divisible by the generator.
+    Returns True if remainder is all zeros.
+    """
+    remainder = mod2div(codeword, generator)
+    return all(bit == '0' for bit in remainder)
+
+
+def main():
+    print("=" * 60)
+    print("        CYCLIC REDUNDANCY CHECK (CRC)")
+    print("        Encoder & Verifier")
+    print("=" * 60)
+
+    # ----- Built‑in example (shows correct operation) -----
+    example_data = "1101"
+    example_gen = "1011"
+    example_code = encode_data(example_data, example_gen)
+    print("\n Example:")
+    print(f"  Data      : {example_data}")
+    print(f"  Generator : {example_gen}")
+    print(f"  Codeword  : {example_code}")
+    valid = verify_codeword(example_code, example_gen)
+    print(f"  Verification: {' Valid' if valid else '✗ Invalid'}")
+    print("  (Remainder = 001 – should be zero after division)")
+
+    # ----- User input -----
+    print("\n" + "-" * 60)
+    data = input("Enter message (binary, e.g. 1110101): ").strip()
+    gen = input("Enter generator polynomial (binary, e.g. 1101): ").strip()
+
+    # Basic input validation
+    if not all(c in '01' for c in data) or not all(c in '01' for c in gen):
+        print("Error: Input must contain only 0 and 1.")
+        return
+    if len(gen) < 2:
+        print("Error: Generator must have at least 2 bits.")
+        return
+
+    codeword = encode_data(data, gen)
+    print(f"\n Generated Codeword: {codeword}")
+
+    if verify_codeword(codeword, gen):
+        print(" Verification: SUCCESS (remainder = 0)")
+    else:
+        print(" Verification: FAILURE (remainder ≠ 0) — something is wrong.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,188 @@
+import random
+import time
+
+# ==============================================================
+# Stop-and-Wait ARQ Simulation (Fixed and Refactored)
+# ==============================================================
+
+# Fixed seed for reproducible simulation
+random.seed(10)
+
+# Channel loss probabilities (increased for visible effects)
+FRAME_LOSS_PROB = 0.35      # Probability that a data frame is lost
+ACK_LOSS_PROB   = 0.25      # Probability that an ACK is lost
+TIMEOUT         = 1.5       # Sender timeout in seconds
+
+# Messages to transmit
+MESSAGES = [
+    "Hello",
+    "Computer Networks",
+    "Stop and Wait ARQ",
+    "Python Simulation",
+    "Transmission Complete"
+]
+
+
+# --------------------------------------------------------------
+# Sender functions
+# --------------------------------------------------------------
+
+def send_frame(seq_num: int, payload: str):
+    """
+    Simulate sending a frame over a lossy channel.
+    Returns the frame (seq_num, payload) if delivered, else None.
+    """
+    print("\n" + "-" * 50)
+    print("Sender")
+    print(f"  Sending Frame")
+    print(f"  Sequence Number : {seq_num}")
+    print(f"  Payload         : {payload}")
+
+    time.sleep(0.7)  # Transmission delay
+
+    if random.random() < FRAME_LOSS_PROB:
+        print("CHANNEL : Frame LOST")
+        return None
+
+    print("CHANNEL : Frame Delivered")
+    return (seq_num, payload)
+
+
+def send_ack(ack_num: int):
+    """
+    Simulate sending an acknowledgment over a lossy channel.
+    Returns the ACK number if delivered, else None.
+    """
+    time.sleep(0.5)  # Propagation delay
+
+    if random.random() < ACK_LOSS_PROB:
+        print(f"CHANNEL : ACK({ack_num}) LOST")
+        return None
+
+    print(f"CHANNEL : ACK({ack_num}) Delivered")
+    return ack_num
+
+
+# --------------------------------------------------------------
+# Receiver functions
+# --------------------------------------------------------------
+
+def receive_frame(frame, expected_seq: int):
+    """
+    Process a received frame (or None if lost).
+    Returns:
+      - ack_num: the sequence number to acknowledge (or None if no frame)
+      - payload: accepted data (or None if discarded)
+      - next_expected: updated expected sequence number
+    """
+    if frame is None:
+        print("Receiver : No frame received.")
+        return None, None, expected_seq
+
+    seq_num, payload = frame
+    print("\nReceiver")
+    print(f"  Received Sequence : {seq_num}")
+
+    if seq_num == expected_seq:
+        # Correct frame – accept it and toggle expectation
+        print("  Status            : Correct Frame")
+        print(f"  Accepted Data     : {payload}")
+        new_expected = expected_seq ^ 1
+        return seq_num, payload, new_expected
+    else:
+        # Duplicate frame – discard but send ACK for the already accepted frame
+        print("  Status            : Duplicate Frame")
+        print("  Discarding Duplicate")
+        # The ACK to send is the sequence number of the last correctly received frame
+        # which is the opposite of expected_seq (since we expect the other)
+        ack_to_send = 1 - expected_seq
+        return ack_to_send, None, expected_seq
+
+
+# --------------------------------------------------------------
+# Main simulation loop
+# --------------------------------------------------------------
+
+def main():
+    sent_messages = []      # successfully transmitted messages
+    received_messages = []  # messages accepted by the receiver
+
+    sender_seq = 0          # current sequence number used by sender
+    receiver_expected = 0   # sequence number expected by receiver
+
+    msg_index = 0           # index into MESSAGES list
+
+    print("=" * 70)
+    print("        STOP AND WAIT ARQ PROTOCOL SIMULATION")
+    print("=" * 70)
+
+    while msg_index < len(MESSAGES):
+        message = MESSAGES[msg_index]
+
+        while True:
+            # 1. Sender sends a frame
+            frame = send_frame(sender_seq, message)
+
+            # 2. Receiver processes the frame (if any)
+            if frame is not None:
+                ack_num, payload, receiver_expected = receive_frame(frame, receiver_expected)
+                if payload is not None:
+                    received_messages.append(payload)
+                # Send an ACK for the received frame (could be duplicate)
+                ack = send_ack(ack_num)
+            else:
+                # Frame was lost – no ACK is sent
+                ack = None
+                # receiver_expected remains unchanged
+
+            # 3. Sender checks the acknowledgment
+            if ack == sender_seq:
+                # Valid ACK received – move to next message
+                print(f"\nSender : ACK({ack}) Received")
+                print("Sender : Transmission Successful")
+                sent_messages.append(message)
+                sender_seq ^= 1          # toggle for next frame
+                msg_index += 1
+                break
+            else:
+                # No ACK or wrong ACK – timeout and retransmit
+                print("\nSender : ACK Not Received (or lost)")
+                print(f"Waiting {TIMEOUT} seconds...")
+                time.sleep(TIMEOUT)
+                print("TIMEOUT OCCURRED")
+                print("Retransmitting Same Frame...")
+                # loop continues to retransmit
+
+    # ----------------------------------------------------------
+    # Final report
+    # ----------------------------------------------------------
+
+    print("\n")
+    print("=" * 70)
+    print("TRANSMISSION REPORT")
+    print("=" * 70)
+
+    print("\nOriginal Messages:")
+    for i, msg in enumerate(MESSAGES, 1):
+        print(f"  {i}. {msg}")
+
+    print("\nReceived Messages:")
+    for i, msg in enumerate(received_messages, 1):
+        print(f"  {i}. {msg}")
+
+    print("\nStatistics:")
+    print(f"  Messages Sent Successfully : {len(sent_messages)}")
+    print(f"  Messages Received          : {len(received_messages)}")
+
+    if sent_messages == received_messages:
+        print("\nRESULT : SUCCESS")
+        print("Every message reached the receiver correctly.")
+    else:
+        print("\nRESULT : FAILURE")
+        print("Some messages were lost or corrupted.")
+
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

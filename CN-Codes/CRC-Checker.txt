@@ -1,0 +1,96 @@
+"""
+CRC (Cyclic Redundancy Check) Error Detector
+Checks if a received codeword has errors.
+"""
+
+def xor_bits(a: str, b: str) -> str:
+    """XOR two binary strings of equal length."""
+    return ''.join('0' if a[i] == b[i] else '1' for i in range(len(a)))
+
+
+def mod2div(dividend: str, divisor: str) -> str:
+    """
+    Perform binary polynomial division (mod-2) and return the remainder.
+    Remainder length = len(divisor) - 1.
+    """
+    n = len(divisor)
+    temp = dividend[:n]
+    zero_pad = '0' * n
+
+    for bit in dividend[n:]:
+        if temp[0] == '1':
+            temp = xor_bits(divisor, temp)
+        else:
+            temp = xor_bits(zero_pad, temp)
+        temp = temp[1:] + bit
+
+    # Final reduction
+    if temp[0] == '1':
+        temp = xor_bits(divisor, temp)
+    else:
+        temp = xor_bits(zero_pad, temp)
+
+    return temp[1:]   # remainder
+
+
+def decode_data(codeword: str, generator: str) -> int:
+    """
+    Check if the received codeword has errors.
+    Returns 0 if no error (remainder = 0), else 1 if error detected.
+    """
+    remainder = mod2div(codeword, generator)
+    return 0 if all(bit == '0' for bit in remainder) else 1
+
+
+def demo():
+    """Run the two examples from the problem statement."""
+    print("=" * 50)
+    print("   CRC ERROR CHECKER - DEMO")
+    print("=" * 50)
+
+    examples = [
+        ("1101001", "1011", 0),   # no error
+        ("1101011", "1011", 1)    # error
+    ]
+
+    for i, (code, key, expected) in enumerate(examples, 1):
+        print(f"\nExample {i}:")
+        print(f"  Received codeword : {code}")
+        print(f"  Generator         : {key}")
+        result = decode_data(code, key)
+        print(f"  Result            : {result}")
+        if result == 0:
+            print("  No error detected (remainder = 0).")
+        else:
+            print("  Error detected (remainder != 0).")
+        # Verify expected matches
+        if result != expected:
+            print("  WARNING: result does not match expected!")
+
+
+def main():
+    print("\n" + "=" * 50)
+    print("   CRC ERROR CHECKER")
+    print("=" * 50)
+    code = input("Enter received codeword (binary eg:1101001): ").strip()
+    key = input("Enter generator polynomial (binary eg: 1011): ").strip()
+
+    # Validate input
+    if not all(c in '01' for c in code) or not all(c in '01' for c in key):
+        print("Error: Input must contain only 0 and 1.")
+    elif len(key) < 2:
+        print("Error: Generator must have at least 2 bits.")
+    else:
+        result = decode_data(code, key)
+        print(f"\nResult: {result}")
+        if result == 0:
+            print("No error detected (remainder = 0).")
+        else:
+            print("Error detected (remainder != 0).")
+
+
+if __name__ == "__main__":
+    # First show the examples
+    demo()
+    # Then run the interactive checker
+    main()

@@ -1,0 +1,65 @@
+def ip_class_finder(ip_address: str) -> str:
+    """
+    Determine the class of an IPv4 address based on the first octet.
+
+    Args:
+        ip_address (str): IPv4 address in dotted decimal format (e.g., '192.168.1.1')
+
+    Returns:
+        str: The IP class ('A', 'B', 'C', 'D', 'E') or 'Invalid'
+    """
+    try:
+        first_octet = int(ip_address.split('.')[0])
+    except (ValueError, IndexError):
+        return "Invalid"
+
+    if 0 <= first_octet <= 127:
+        return "A"
+    elif 128 <= first_octet <= 191:
+        return "B"
+    elif 192 <= first_octet <= 223:
+        return "C"
+    elif 224 <= first_octet <= 239:
+        return "D"
+    elif 240 <= first_octet <= 255:
+        return "E"
+    else:
+        return "Invalid"
+
+
+def main():
+    """Demo the IP classifier with several examples and then interactive input."""
+    # Example test cases (address, expected class)
+    examples = [
+        ("10.0.0.1", "A"),
+        ("127.0.0.1", "A"),
+        ("128.1.2.3", "B"),
+        ("191.255.255.255", "B"),
+        ("192.168.1.1", "C"),
+        ("223.255.255.255", "C"),
+        ("224.0.0.1", "D"),
+        ("239.255.255.255", "D"),
+        ("240.0.0.1", "E"),
+        ("255.255.255.255", "E"),
+        ("300.1.2.3", "Invalid")
+    ]
+
+    print("=" * 50)
+    print("IP CLASS FINDER - DEMO")
+    print("=" * 50)
+    for ip, expected in examples:
+        result = ip_class_finder(ip)
+        status = "PASS" if result == expected else "FAIL"
+        print(f"IP: {ip:18} -> Class {result:8} {status}")
+
+    # Interactive user input
+    print("\n" + "=" * 50)
+    print("ENTER YOUR OWN IP ADDRESS")
+    print("=" * 50)
+    user_ip = input("Enter an IP Address (Eg : 192.168.0.1): ").strip()
+    cls = ip_class_finder(user_ip)
+    print(f"IP: {user_ip} -> Class {cls}")
+
+
+if __name__ == "__main__":
+    main()
